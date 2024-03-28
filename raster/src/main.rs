@@ -1,3 +1,4 @@
+use core::fmt;
 use image::{Rgb, RgbImage};
 use imageproc::point;
 use std::{
@@ -5,108 +6,115 @@ use std::{
     path::Path,
 };
 
-#[derive(Debug)]
+#[derive(Clone)]
 struct Point {
     x: i32,
     y: i32,
 }
 
-// impl Sub for Point {
-//     type Output = Self;
+impl std::fmt::Debug for Point {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "({}, {})", self.x, self.y)
+    }
+}
 
-//     fn sub(self, rhs: Self) -> Self::Output {
-//         Self {
-//             x: self.x - rhs.x,
-//             y: self.y - rhs.y,
-//         }
-//     }
-// }
+impl Point {
+    fn new(x: i32, y: i32) -> Self {
+        Point { x, y }
+    }
 
-// impl Div for Point {
-//     type Output = Self;
+    fn swap(a: &mut Point, b: &mut Point) {
+        let _ = std::mem::replace(a, b.clone());
+    }
+}
 
-//     fn div(self, rhs: Self) -> Self::Output {
-
-//     }
-// }
-
-type VectorPoint = (f32, f32, f32);
-
-const CANVAS_WIDTH: i32 = 500;
-const CANVAS_HEIGHT: i32 = 500;
-const VIEWPORT_SIZE: f32 = 2.0;
-const PROJECTION_PLANE_Z: f32 = 1.0;
+const CANVAS_WIDTH: i32 = 1000;
+const CANVAS_HEIGHT: i32 = 1000;
 const BACKGROUND_COLOR: Rgb<u8> = Rgb([255, 255, 255]);
 
 fn put_pixel(canvas: &mut RgbImage, color: Rgb<u8>, coord: Point) {
-    if coord.x >= 0
-        && coord.x < canvas.width() as i32
-        && coord.y >= 0
-        && coord.y < canvas.height() as i32
-    {
-        canvas.put_pixel(coord.x as u32, coord.y as u32, color);
+    let y_offset = CANVAS_HEIGHT / 2;
+    let x_offset = CANVAS_WIDTH / 2;
+
+    if coord.x < -x_offset || coord.x > x_offset || coord.y < -y_offset || coord.y > y_offset {
+        println!("Point - {:?} is out of bound ", coord);
+        return;
+    }
+
+    canvas.put_pixel(
+        (coord.x + x_offset) as u32,
+        (coord.y + y_offset) as u32,
+        color,
+    );
+}
+
+/// Creates a Vec of dependant values d, d = f(i).
+/// i - independant variables.
+fn interpolate(i0: i32, d0: i32, i1: i32, d1: i32) -> Vec<i32> {
+    if i0 == i1 {
+        return vec![d0];
+    }
+
+    let mut values: Vec<i32> = vec![];
+    let a = ((d1 - d0) as f32) / ((i1 - i0) as f32);
+    let mut d = d0 as f32;
+
+    for _i in i0..i1 {
+        values.push(d.round() as i32);
+
+        d = d + a;
+    }
+
+    return values;
+}
+
+fn draw_line(
+    canvas: &mut RgbImage,
+    mut point_a: &mut Point,
+    mut point_b: &mut Point,
+    color: Rgb<u8>,
+) {
+    let dx = point_b.x - point_a.x;
+    let dy = point_b.y - point_a.y;
+
+    if dx.abs() > dy.abs() {
+        //line is horizontalish
+        if point_a.x > point_b.x {
+            Point::swap(&mut point_a, &mut point_b);
+        }
+
+        let ys = interpolate(point_a.x, point_a.y, point_b.x, point_b.y);
+
+        for x in point_a.x..point_b.x {
+            let point = Point::new(x, ys[(x - point_a.x) as usize]);
+            put_pixel(canvas, color, point);
+        }
+    } else {
+        // Line is vertical-ish
+
+        if point_a.y > point_b.y {
+            Point::swap(&mut point_a, &mut point_b);
+        }
+
+        let xs = interpolate(point_a.y, point_a.x, point_b.y, point_b.x);
+
+        for y in point_a.y..point_b.y {
+            let point = Point::new(xs[(y - point_a.y) as usize], y);
+            put_pixel(canvas, color, point);
+        }
     }
 }
 
-fn canvas_to_viewport(x: f32, y: f32) -> VectorPoint {
-    (
-        x * VIEWPORT_SIZE / CANVAS_WIDTH as f32,
-        y * VIEWPORT_SIZE / CANVAS_HEIGHT as f32,
-        PROJECTION_PLANE_Z,
-    )
-}
-
-fn substract_vector(a: VectorPoint, b: VectorPoint) -> VectorPoint {
-    (a.0 - b.0, a.1 - b.1, a.2 - b.2)
-}
-
-fn add_vector(a: VectorPoint, b: VectorPoint) -> VectorPoint {
-    (a.0 + b.0, a.1 + b.1, a.2 + b.2)
-}
-
-fn dot_number(a: VectorPoint, b: f32) -> VectorPoint {
-    (a.0 * b, a.1 * b, a.2 * b)
-}
-
-fn dot_vector(a: VectorPoint, b: VectorPoint) -> f32 {
-    a.0 * b.0 + a.1 * b.1 + a.2 * b.2
-}
-
-fn length(a: VectorPoint) -> f32 {
-    (a.0 * a.0 + a.1 * a.1 + a.2 * a.2).sqrt()
-}
-
-fn negate(a: VectorPoint) -> VectorPoint {
-    (-a.0, -a.1, -a.2)
-}
-
-fn divide_number(a: VectorPoint, b: f32) -> VectorPoint {
-    (a.0 / b, a.1 / b, a.2 / b)
-}
-
-fn draw_line(canvas: &mut RgbImage, mut point_a: Point, mut point_b: Point, color: Rgb<u8>) {
-    if point_a.x > point_b.x {
-      let temp = Point {..point_b};
-      point_b = point_a;  
-      point_a = temp;
-    } 
-
-    let y1 = point_b.y as f32;
-    let y0 = point_a.y as f32;
-    let x1 = point_b.x as f32;
-    let x0 = point_a.x as f32;
-    let a = (y1 - y0) / (x1 - x0);
-
-
-    // let b = y0 - a * x0;
-
-    let mut y = point_a.y;
-
-    for x in point_a.x..point_b.x {
-        // let y = (a * (x as f32) + b).round() as i32;
-        put_pixel(canvas, color, Point { x, y });
-        y = y + a.round() as i32;
-    }
+fn draw_wireframe_triangle(
+    p0: &mut Point,
+    p1: &mut Point,
+    p2: &mut Point,
+    color: Rgb<u8>,
+    canvas: &mut RgbImage,
+) {
+    draw_line(canvas, p0, p1, color);
+    draw_line(canvas, p1, p2, color);
+    draw_line(canvas, p2, p0, color);
 }
 
 fn main() {
@@ -121,27 +129,26 @@ fn main() {
         pix.0 = BACKGROUND_COLOR.0;
     }
 
-    // canvas.fill_with(f)
+    // draw_line(
+    //     &mut canvas,
+    //     &mut Point { x: 1300, y: 0 },
+    //     &mut Point { x: 0, y: 1300 },
+    //     Rgb([0, 0, 0]),
+    // );
 
-    draw_line(
-        &mut canvas,
-        Point { x: 0, y: 0 },
-        Point { x: 1300, y: 1300 },
-        Rgb([0, 0, 0]),
-    );
+    // draw_line(
+    //     &mut canvas,
+    //     &mut Point { x: 0, y: 0 },
+    //     &mut Point { x: 450, y: 500 },
+    //     Rgb([0, 0, 0]),
+    // );
 
-    draw_line(
-        &mut canvas,
-        Point { x: 1300, y: 0 },
-        Point { x: 0, y: 1300 },
+    draw_wireframe_triangle(
+        &mut Point { x: 0, y: 0 },
+        &mut Point { x: -40, y: 300 },
+        &mut Point { x: 300, y: 100 },
         Rgb([0, 0, 0]),
-    );
-
-    draw_line(
         &mut canvas,
-        Point { x: 100, y: 0 },
-        Point { x: 60, y: 1300 },
-        Rgb([0, 0, 0]),
     );
 
     canvas.save(path).unwrap();
