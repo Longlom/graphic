@@ -1,10 +1,6 @@
 use core::fmt;
-use image::{Rgb, RgbImage};
-use imageproc::point;
-use std::{
-    ops::{Div, Mul, Sub},
-    path::Path,
-};
+use image::{Pixel, Rgb, RgbImage};
+use std::path::Path;
 
 #[derive(Clone)]
 struct Point {
@@ -24,7 +20,7 @@ impl Point {
     }
 
     fn swap(a: &mut Point, b: &mut Point) {
-        let _ = std::mem::replace(a, b.clone());
+        let _ = std::mem::swap(a, b);
     }
 }
 
@@ -50,6 +46,7 @@ fn put_pixel(canvas: &mut RgbImage, color: Rgb<u8>, coord: Point) {
 
 /// Creates a Vec of dependant values d, d = f(i).
 /// i - independant variables.
+/// works with i32
 fn interpolate(i0: i32, d0: i32, i1: i32, d1: i32) -> Vec<i32> {
     if i0 == i1 {
         return vec![d0];
@@ -59,8 +56,26 @@ fn interpolate(i0: i32, d0: i32, i1: i32, d1: i32) -> Vec<i32> {
     let a = ((d1 - d0) as f32) / ((i1 - i0) as f32);
     let mut d = d0 as f32;
 
-    for _i in i0..i1 {
+    for _i in i0..=i1 {
         values.push(d.round() as i32);
+
+        d = d + a;
+    }
+
+    return values;
+}
+
+fn interpolate_f32(i0: i32, d0: f32, i1: i32, d1: f32) -> Vec<f32> {
+    if i0 == i1 {
+        return vec![d0];
+    }
+
+    let mut values: Vec<f32> = vec![];
+    let a = (d1 - d0) / ((i1 - i0) as f32);
+    let mut d = d0;
+
+    for _i in i0..=i1 {
+        values.push(d);
 
         d = d + a;
     }
@@ -91,7 +106,6 @@ fn draw_line(
         }
     } else {
         // Line is vertical-ish
-
         if point_a.y > point_b.y {
             Point::swap(&mut point_a, &mut point_b);
         }
@@ -115,6 +129,81 @@ fn draw_wireframe_triangle(
     draw_line(canvas, p0, p1, color);
     draw_line(canvas, p1, p2, color);
     draw_line(canvas, p2, p0, color);
+}
+
+fn draw_filled_triangle(
+    p0: &mut Point,
+    p1: &mut Point,
+    p2: &mut Point,
+    color: Rgb<u8>,
+    canvas: &mut RgbImage,
+) {
+    if p1.y < p0.y {
+        Point::swap(p1, p0);
+    }
+
+    if p2.y < p0.y {
+        Point::swap(p2, p0);
+    }
+
+    if p2.y < p1.y {
+        Point::swap(p2, p1);
+    }
+
+    let mut x01 = interpolate(p0.y, p0.x, p1.y, p1.x);
+    let mut h01 = interpolate_f32(p0.y, 0., p1.y, 0.4);
+
+    let mut x12 = interpolate(p1.y, p1.x, p2.y, p2.x);
+    let mut h12 = interpolate_f32(p1.y, 0.4, p2.y, 0.9);
+
+    let x02 = interpolate(p0.y, p0.x, p2.y, p2.x);
+    let mut h02 = interpolate_f32(p0.y, 0., p2.y, 0.9);
+
+    x01.pop().unwrap();
+    x01.append(&mut x12);
+
+    h01.pop().unwrap();
+    h01.append(&mut h12);
+
+    let m = ((x02.len() as f32) / 2.).floor() as usize;
+
+    let x_left;
+    let x_right;
+
+    let h_left;
+    let h_right;
+
+    if x02[m] < x01[m] {
+        x_left = x02;
+        h_left = h02;
+
+        x_right = x01;
+        h_right = h01;
+    } else {
+        x_left = x01;
+        h_left = h01;
+
+        x_right = x02;
+        h_right = h02;
+    }
+
+    for y in p0.y..=p2.y {
+        let x_l = x_left[(y - p0.y) as usize];
+        let x_r = x_right[(y - p0.y) as usize];
+
+        let h_segment = interpolate_f32(
+            x_l,
+            h_left[(y - p0.y) as usize],
+            x_r,
+            h_right[(y - p0.y) as usize],
+        );
+
+        for x in x_l..x_r {
+            let mut color = color.clone();
+            color.apply(|x_in| ((x_in as f32) * h_segment[(x - x_l) as usize]).round() as u8);
+            put_pixel(canvas, color, Point::new(x, y))
+        }
+    }
 }
 
 fn main() {
@@ -143,7 +232,7 @@ fn main() {
     //     Rgb([0, 0, 0]),
     // );
 
-    draw_wireframe_triangle(
+    draw_filled_triangle(
         &mut Point { x: 0, y: 0 },
         &mut Point { x: -40, y: 300 },
         &mut Point { x: 300, y: 100 },
