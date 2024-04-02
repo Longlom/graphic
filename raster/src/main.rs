@@ -2,6 +2,8 @@ use core::fmt;
 use image::{Pixel, Rgb, RgbImage};
 use std::path::Path;
 
+type Color = Rgb<u8>;
+
 #[derive(Clone)]
 struct Point {
     x: i32,
@@ -22,13 +24,49 @@ impl Point {
     fn swap(a: &mut Point, b: &mut Point) {
         let _ = std::mem::swap(a, b);
     }
+
+    fn viewport_to_canvas(x: f32, y: f32) -> Self {
+        return Point {
+            x: (x * (CANVAS_WIDTH as f32) / VIEWPORT_SIZE).round() as i32,
+            y: (y * (CANVAS_HEIGHT as f32) / VIEWPORT_SIZE).round() as i32,
+        };
+    }
 }
 
-const CANVAS_WIDTH: i32 = 1000;
-const CANVAS_HEIGHT: i32 = 1000;
+#[derive(Clone, Copy)]
+struct VectorPoint {
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+impl VectorPoint {
+    fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
+    }
+}
+
+struct Triangle {
+    vertex: (usize, usize, usize),
+    color: Color,
+}
+
+impl Triangle {
+    fn new(vertex: (usize, usize, usize), color: Color) -> Self {
+        Self { vertex, color }
+    }
+}
+
+const THRESHOLD_CANVAS: i32 = 10;
+const CANVAS_WIDTH: i32 = 1500;
+const CANVAS_HEIGHT: i32 = 1500;
+
+const VIEWPORT_SIZE: f32 = 4.0;
+const PROJECTION_PLANE_Z: f32 = 1.0;
+
 const BACKGROUND_COLOR: Rgb<u8> = Rgb([255, 255, 255]);
 
-fn put_pixel(canvas: &mut RgbImage, color: Rgb<u8>, coord: Point) {
+fn put_pixel(canvas: &mut RgbImage, color: &mut Rgb<u8>, coord: Point) {
     let y_offset = CANVAS_HEIGHT / 2;
     let x_offset = CANVAS_WIDTH / 2;
 
@@ -40,7 +78,7 @@ fn put_pixel(canvas: &mut RgbImage, color: Rgb<u8>, coord: Point) {
     canvas.put_pixel(
         (coord.x + x_offset) as u32,
         (coord.y + y_offset) as u32,
-        color,
+        *color,
     );
 }
 
@@ -87,7 +125,7 @@ fn draw_line(
     canvas: &mut RgbImage,
     mut point_a: &mut Point,
     mut point_b: &mut Point,
-    color: Rgb<u8>,
+    color: &mut Rgb<u8>,
 ) {
     let dx = point_b.x - point_a.x;
     let dy = point_b.y - point_a.y;
@@ -123,7 +161,7 @@ fn draw_wireframe_triangle(
     p0: &mut Point,
     p1: &mut Point,
     p2: &mut Point,
-    color: Rgb<u8>,
+    color: &mut Rgb<u8>,
     canvas: &mut RgbImage,
 ) {
     draw_line(canvas, p0, p1, color);
@@ -201,17 +239,50 @@ fn draw_filled_triangle(
         for x in x_l..x_r {
             let mut color = color.clone();
             color.apply(|x_in| ((x_in as f32) * h_segment[(x - x_l) as usize]).round() as u8);
-            put_pixel(canvas, color, Point::new(x, y))
+            put_pixel(canvas, &mut color, Point::new(x, y))
         }
+    }
+}
+
+fn project_vertex(v: VectorPoint) -> Point {
+    return Point::viewport_to_canvas(
+        v.x * PROJECTION_PLANE_Z / v.z,
+        v.y * PROJECTION_PLANE_Z / v.z,
+    );
+}
+
+fn render_triangle(canvas: &mut RgbImage, triangle: &mut Triangle, projected: &mut Vec<Point>) {
+    let mut p0 = projected[triangle.vertex.0].clone();
+    let mut p1 = projected[triangle.vertex.1].clone();
+    let mut p2 = projected[triangle.vertex.2].clone();
+    draw_wireframe_triangle(&mut p0, &mut p1, &mut p2, &mut triangle.color, canvas)
+}
+
+fn render_object(canvas: &mut RgbImage, vertices: Vec<VectorPoint>, triangles: Vec<Triangle>) {
+    let mut projected = vec![];
+
+    for v in vertices {
+        projected.push(project_vertex(v));
+    }
+
+    for mut t in triangles {
+        render_triangle(canvas, &mut t, &mut projected);
     }
 }
 
 fn main() {
     let path = Path::new("./imgs/1_draw_line.png");
 
+    let mut BLUE = Rgb([0, 0, 255]);
+    let mut RED = Rgb([255, 0, 0]);
+    let mut GREEN = Rgb([0, 255, 0]);
+    let mut CYAN = Rgb([0, 255, 255]);
+    let mut PURPLE = Rgb([128, 0, 128]);
+    let mut YELLOW = Rgb([255, 255, 0]);
+
     let mut canvas = RgbImage::new(
-        u32::try_from(CANVAS_WIDTH).unwrap(),
-        u32::try_from(CANVAS_HEIGHT).unwrap(),
+        u32::try_from(CANVAS_WIDTH + THRESHOLD_CANVAS).unwrap(),
+        u32::try_from(CANVAS_HEIGHT + THRESHOLD_CANVAS).unwrap(),
     );
 
     for (x, y, pix) in canvas.enumerate_pixels_mut() {
@@ -232,13 +303,138 @@ fn main() {
     //     Rgb([0, 0, 0]),
     // );
 
-    draw_filled_triangle(
-        &mut Point { x: 0, y: 0 },
-        &mut Point { x: -40, y: 300 },
-        &mut Point { x: 300, y: 100 },
-        Rgb([0, 0, 0]),
-        &mut canvas,
-    );
+    // draw_filled_triangle(
+    //     &mut Point { x: 0, y: 0 },
+    //     &mut Point { x: -40, y: 300 },
+    //     &mut Point { x: 300, y: 100 },
+    //     Rgb([0, 255, 0]),
+    //     &mut canvas,
+    // );
+
+    // The four "front" vertices
+    // let va_f = VectorPoint::new(-1., 1., 1.);
+    // let vb_f = VectorPoint::new(1., 1., 1.);
+    // let vc_f = VectorPoint::new(1., -1., 1.);
+    // let vd_f = VectorPoint::new(-1., -1., 1.);
+
+    // // The four "back" vertices
+    // let va_b = VectorPoint::new(-1., 1., 2.);
+    // let vb_b = VectorPoint::new(1., 1., 2.);
+    // let vc_b = VectorPoint::new(1., -1., 2.);
+    // let vd_b = VectorPoint::new(-1., -1., 2.);
+
+    // Define vertices
+    let v0 = VectorPoint::new(1., 1., 1.);
+    let v1 = VectorPoint::new(-1., 1., 1.);
+    let v2 = VectorPoint::new(-1., -1., 1.);
+    let v3 = VectorPoint::new(1., -1., 1.);
+    let v4 = VectorPoint::new(1., 1., -1.);
+    let v5 = VectorPoint::new(-1., 1., -1.);
+    let v6 = VectorPoint::new(-1., -1., -1.);
+    let v7 = VectorPoint::new(1., -1., -1.);
+
+    // Define triangles
+    let triangles = vec![
+        Triangle::new((0, 1, 2), RED.clone()),
+        Triangle::new((0, 2, 3), RED.clone()),
+        Triangle::new((4, 0, 3), GREEN.clone()),
+        Triangle::new((4, 3, 7), GREEN.clone()),
+        Triangle::new((5, 4, 7), BLUE.clone()),
+        Triangle::new((5, 7, 6), BLUE.clone()),
+        Triangle::new((1, 5, 6), YELLOW.clone()),
+        Triangle::new((1, 6, 2), YELLOW.clone()),
+        Triangle::new((4, 5, 1), PURPLE.clone()),
+        Triangle::new((4, 1, 0), PURPLE.clone()),
+        Triangle::new((2, 6, 7), CYAN.clone()),
+        Triangle::new((2, 7, 3), CYAN.clone()),
+    ];
+
+    render_object(&mut canvas, vec![v0, v1, v2, v3, v4, v5, v6, v7], triangles);
+    // draw_line(
+    //     &mut canvas,
+    //     &mut project_vertex(va_f),
+    //     &mut project_vertex(vb_f),
+    //     &mut BLUE,
+    // );
+
+    // draw_line(
+    //     &mut canvas,
+    //     &mut project_vertex(vb_f),
+    //     &mut project_vertex(vc_f),
+    //     &mut BLUE,
+    // );
+
+    // draw_line(
+    //     &mut canvas,
+    //     &mut project_vertex(vc_f),
+    //     &mut project_vertex(vd_f),
+    //     &mut BLUE,
+    // );
+
+    // draw_line(
+    //     &mut canvas,
+    //     &mut project_vertex(vd_f),
+    //     &mut project_vertex(va_f),
+    //     &mut BLUE,
+    // );
+
+    // // BackFace
+    // draw_line(
+    //     &mut canvas,
+    //     &mut project_vertex(va_b),
+    //     &mut project_vertex(vb_b),
+    //     &mut RED,
+    // );
+
+    // draw_line(
+    //     &mut canvas,
+    //     &mut project_vertex(vb_b),
+    //     &mut project_vertex(vc_b),
+    //     &mut RED,
+    // );
+
+    // draw_line(
+    //     &mut canvas,
+    //     &mut project_vertex(vc_b),
+    //     &mut project_vertex(vd_b),
+    //     &mut RED,
+    // );
+
+    // draw_line(
+    //     &mut canvas,
+    //     &mut project_vertex(vd_b),
+    //     &mut project_vertex(va_b),
+    //     &mut RED,
+    // );
+
+    // // The front-to-back edges
+    // draw_line(
+    //     &mut canvas,
+    //     &mut project_vertex(va_f),
+    //     &mut project_vertex(va_b),
+    //     &mut GREEN,
+    // );
+
+    // draw_line(
+    //     &mut canvas,
+    //     &mut project_vertex(vb_f),
+    //     &mut project_vertex(vb_b),
+    //     &mut GREEN,
+    // );
+
+    // draw_line(
+    //     &mut canvas,
+    //     &mut project_vertex(vc_f),
+    //     &mut project_vertex(vc_b),
+    //     &mut GREEN,
+    // );
+
+    // draw_line(
+    //     &mut canvas,
+    //     &mut project_vertex(vd_f),
+    //     &mut project_vertex(vd_b),
+    //     &mut GREEN,
+    // );
 
     canvas.save(path).unwrap();
 }
