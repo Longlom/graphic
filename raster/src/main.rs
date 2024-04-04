@@ -1,8 +1,17 @@
 use core::fmt;
 use image::{Pixel, Rgb, RgbImage};
-use std::path::Path;
+use std::{ops, path::Path};
 
 type Color = Rgb<u8>;
+
+const THRESHOLD_CANVAS: i32 = 10;
+const CANVAS_WIDTH: i32 = 1500;
+const CANVAS_HEIGHT: i32 = 1500;
+
+const VIEWPORT_SIZE: f32 = 4.0;
+const PROJECTION_PLANE_Z: f32 = 4.0;
+
+const BACKGROUND_COLOR: Rgb<u8> = Rgb([255, 255, 255]);
 
 #[derive(Clone)]
 struct Point {
@@ -46,6 +55,19 @@ impl VectorPoint {
     }
 }
 
+impl ops::Add for VectorPoint {
+    type Output = VectorPoint;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        return Self {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+            z: self.z + rhs.z,
+        };
+    }
+}
+
+#[derive(Clone)]
 struct Triangle {
     vertex: (usize, usize, usize),
     color: Color,
@@ -57,14 +79,48 @@ impl Triangle {
     }
 }
 
-const THRESHOLD_CANVAS: i32 = 10;
-const CANVAS_WIDTH: i32 = 1500;
-const CANVAS_HEIGHT: i32 = 1500;
+enum ModelName {
+    CUBE,
+}
 
-const VIEWPORT_SIZE: f32 = 4.0;
-const PROJECTION_PLANE_Z: f32 = 1.0;
+struct Transform {
+    scale: f32,
+    rotation: i32,
+    translation: VectorPoint,
+}
 
-const BACKGROUND_COLOR: Rgb<u8> = Rgb([255, 255, 255]);
+impl Transform {
+    fn new(scale: f32, rotation: i32, translation: VectorPoint) -> Self {
+        Self {
+            scale,
+            rotation,
+            translation,
+        }
+    }
+}
+
+struct Model {
+    name: ModelName,
+    vertices: Vec<VectorPoint>,
+    triangles: Vec<Triangle>,
+    transform: Transform,
+}
+
+impl Model {
+    fn new(
+        name: ModelName,
+        vertices: Vec<VectorPoint>,
+        triangles: Vec<Triangle>,
+        transform: Transform,
+    ) -> Self {
+        Self {
+            name,
+            vertices,
+            triangles,
+            transform,
+        }
+    }
+}
 
 fn put_pixel(canvas: &mut RgbImage, color: &mut Rgb<u8>, coord: Point) {
     let y_offset = CANVAS_HEIGHT / 2;
@@ -270,6 +326,29 @@ fn render_object(canvas: &mut RgbImage, vertices: Vec<VectorPoint>, triangles: V
     }
 }
 
+fn render_scene(canvas: &mut RgbImage, instances: Vec<Model>) {
+    for i in instances {
+        render_instance(canvas, i);
+    }
+}
+
+fn render_instance(canvas: &mut RgbImage, instance: Model) {
+    let mut projected = vec![];
+
+    for v in instance.vertices {
+        let v_rotated = apply_transform(v, instance.transform);
+        projected.push(project_vertex(v_rotated));
+    }
+
+    for mut t in instance.triangles {
+        render_triangle(canvas, &mut t, &mut projected)
+    }
+}
+
+fn apply_transform(v: VectorPoint, transform: Transform) -> VectorPoint {
+    
+}
+
 fn main() {
     let path = Path::new("./imgs/1_draw_line.png");
 
@@ -323,6 +402,8 @@ fn main() {
     // let vc_b = VectorPoint::new(1., -1., 2.);
     // let vd_b = VectorPoint::new(-1., -1., 2.);
 
+    // let t = VectorPoint::new(-1.5, 0., 3.);
+
     // Define vertices
     let v0 = VectorPoint::new(1., 1., 1.);
     let v1 = VectorPoint::new(-1., 1., 1.);
@@ -333,7 +414,7 @@ fn main() {
     let v6 = VectorPoint::new(-1., -1., -1.);
     let v7 = VectorPoint::new(1., -1., -1.);
 
-    // Define triangles
+    // // Define triangles
     let triangles = vec![
         Triangle::new((0, 1, 2), RED.clone()),
         Triangle::new((0, 2, 3), RED.clone()),
@@ -349,7 +430,24 @@ fn main() {
         Triangle::new((2, 7, 3), CYAN.clone()),
     ];
 
-    render_object(&mut canvas, vec![v0, v1, v2, v3, v4, v5, v6, v7], triangles);
+    let vertices = vec![v0, v1, v2, v3, v4, v5, v6, v7];
+
+    let model_instance1 = Model::new(
+        ModelName::CUBE,
+        vertices.clone(),
+        triangles.clone(),
+        Transform::new(1.5, 45, VectorPoint::new(-1.5, 0., 7.)),
+    );
+    let model_instance2 = Model::new(
+        ModelName::CUBE,
+        vertices.clone(),
+        triangles.clone(),
+        Transform::new(1.5, 45, VectorPoint::new(1.5, 1., 6.)),
+    );
+
+    render_scene(&mut canvas, vec![model_instance1, model_instance2]);
+
+    // render_object(&mut canvas, vec![v0, v1, v2, v3, v4, v5, v6, v7], triangles);
     // draw_line(
     //     &mut canvas,
     //     &mut project_vertex(va_f),
