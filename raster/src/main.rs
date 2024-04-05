@@ -1,126 +1,6 @@
-use core::fmt;
 use image::{Pixel, Rgb, RgbImage};
-use std::{ops, path::Path};
-
-type Color = Rgb<u8>;
-
-const THRESHOLD_CANVAS: i32 = 10;
-const CANVAS_WIDTH: i32 = 1500;
-const CANVAS_HEIGHT: i32 = 1500;
-
-const VIEWPORT_SIZE: f32 = 4.0;
-const PROJECTION_PLANE_Z: f32 = 4.0;
-
-const BACKGROUND_COLOR: Rgb<u8> = Rgb([255, 255, 255]);
-
-#[derive(Clone)]
-struct Point {
-    x: i32,
-    y: i32,
-}
-
-impl std::fmt::Debug for Point {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "({}, {})", self.x, self.y)
-    }
-}
-
-impl Point {
-    fn new(x: i32, y: i32) -> Self {
-        Point { x, y }
-    }
-
-    fn swap(a: &mut Point, b: &mut Point) {
-        let _ = std::mem::swap(a, b);
-    }
-
-    fn viewport_to_canvas(x: f32, y: f32) -> Self {
-        return Point {
-            x: (x * (CANVAS_WIDTH as f32) / VIEWPORT_SIZE).round() as i32,
-            y: (y * (CANVAS_HEIGHT as f32) / VIEWPORT_SIZE).round() as i32,
-        };
-    }
-}
-
-#[derive(Clone, Copy)]
-struct VectorPoint {
-    x: f32,
-    y: f32,
-    z: f32,
-}
-
-impl VectorPoint {
-    fn new(x: f32, y: f32, z: f32) -> Self {
-        Self { x, y, z }
-    }
-}
-
-impl ops::Add for VectorPoint {
-    type Output = VectorPoint;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        return Self {
-            x: self.x + rhs.x,
-            y: self.y + rhs.y,
-            z: self.z + rhs.z,
-        };
-    }
-}
-
-#[derive(Clone)]
-struct Triangle {
-    vertex: (usize, usize, usize),
-    color: Color,
-}
-
-impl Triangle {
-    fn new(vertex: (usize, usize, usize), color: Color) -> Self {
-        Self { vertex, color }
-    }
-}
-
-enum ModelName {
-    CUBE,
-}
-
-struct Transform {
-    scale: f32,
-    rotation: i32,
-    translation: VectorPoint,
-}
-
-impl Transform {
-    fn new(scale: f32, rotation: i32, translation: VectorPoint) -> Self {
-        Self {
-            scale,
-            rotation,
-            translation,
-        }
-    }
-}
-
-struct Model {
-    name: ModelName,
-    vertices: Vec<VectorPoint>,
-    triangles: Vec<Triangle>,
-    transform: Transform,
-}
-
-impl Model {
-    fn new(
-        name: ModelName,
-        vertices: Vec<VectorPoint>,
-        triangles: Vec<Triangle>,
-        transform: Transform,
-    ) -> Self {
-        Self {
-            name,
-            vertices,
-            triangles,
-            transform,
-        }
-    }
-}
+use raster::*;
+use std::{path::Path};
 
 fn put_pixel(canvas: &mut RgbImage, color: &mut Rgb<u8>, coord: Point) {
     let y_offset = CANVAS_HEIGHT / 2;
@@ -153,10 +33,10 @@ fn interpolate(i0: i32, d0: i32, i1: i32, d1: i32) -> Vec<i32> {
     for _i in i0..=i1 {
         values.push(d.round() as i32);
 
-        d = d + a;
+        d += a;
     }
 
-    return values;
+    values
 }
 
 fn interpolate_f32(i0: i32, d0: f32, i1: i32, d1: f32) -> Vec<f32> {
@@ -171,16 +51,16 @@ fn interpolate_f32(i0: i32, d0: f32, i1: i32, d1: f32) -> Vec<f32> {
     for _i in i0..=i1 {
         values.push(d);
 
-        d = d + a;
+        d += a;
     }
 
-    return values;
+    values
 }
 
 fn draw_line(
     canvas: &mut RgbImage,
-    mut point_a: &mut Point,
-    mut point_b: &mut Point,
+    point_a: &mut Point,
+    point_b: &mut Point,
     color: &mut Rgb<u8>,
 ) {
     let dx = point_b.x - point_a.x;
@@ -189,7 +69,7 @@ fn draw_line(
     if dx.abs() > dy.abs() {
         //line is horizontalish
         if point_a.x > point_b.x {
-            Point::swap(&mut point_a, &mut point_b);
+            Point::swap(point_a, point_b);
         }
 
         let ys = interpolate(point_a.x, point_a.y, point_b.x, point_b.y);
@@ -201,7 +81,7 @@ fn draw_line(
     } else {
         // Line is vertical-ish
         if point_a.y > point_b.y {
-            Point::swap(&mut point_a, &mut point_b);
+            Point::swap(point_a, point_b);
         }
 
         let xs = interpolate(point_a.y, point_a.x, point_b.y, point_b.x);
@@ -251,7 +131,7 @@ fn draw_filled_triangle(
     let mut h12 = interpolate_f32(p1.y, 0.4, p2.y, 0.9);
 
     let x02 = interpolate(p0.y, p0.x, p2.y, p2.x);
-    let mut h02 = interpolate_f32(p0.y, 0., p2.y, 0.9);
+    let h02 = interpolate_f32(p0.y, 0., p2.y, 0.9);
 
     x01.pop().unwrap();
     x01.append(&mut x12);
@@ -293,7 +173,7 @@ fn draw_filled_triangle(
         );
 
         for x in x_l..x_r {
-            let mut color = color.clone();
+            let mut color = color;
             color.apply(|x_in| ((x_in as f32) * h_segment[(x - x_l) as usize]).round() as u8);
             put_pixel(canvas, &mut color, Point::new(x, y))
         }
@@ -301,10 +181,10 @@ fn draw_filled_triangle(
 }
 
 fn project_vertex(v: VectorPoint) -> Point {
-    return Point::viewport_to_canvas(
+    Point::viewport_to_canvas(
         v.x * PROJECTION_PLANE_Z / v.z,
         v.y * PROJECTION_PLANE_Z / v.z,
-    );
+    )
 }
 
 fn render_triangle(canvas: &mut RgbImage, triangle: &mut Triangle, projected: &mut Vec<Point>) {
@@ -336,8 +216,8 @@ fn render_instance(canvas: &mut RgbImage, instance: Model) {
     let mut projected = vec![];
 
     for v in instance.vertices {
-        let v_rotated = apply_transform(v, instance.transform);
-        projected.push(project_vertex(v_rotated));
+        let v_transformed = apply_transform(v, instance.transform.clone());
+        projected.push(project_vertex(v_transformed));
     }
 
     for mut t in instance.triangles {
@@ -346,25 +226,28 @@ fn render_instance(canvas: &mut RgbImage, instance: Model) {
 }
 
 fn apply_transform(v: VectorPoint, transform: Transform) -> VectorPoint {
+    let res = v.scale(transform.scale);
+    let res = res.rotate(transform.rotation);
     
+    res.translate(transform.translation)
 }
 
 fn main() {
     let path = Path::new("./imgs/1_draw_line.png");
 
-    let mut BLUE = Rgb([0, 0, 255]);
-    let mut RED = Rgb([255, 0, 0]);
-    let mut GREEN = Rgb([0, 255, 0]);
-    let mut CYAN = Rgb([0, 255, 255]);
-    let mut PURPLE = Rgb([128, 0, 128]);
-    let mut YELLOW = Rgb([255, 255, 0]);
+    let BLUE = Rgb([0, 0, 255]);
+    let RED = Rgb([255, 0, 0]);
+    let GREEN = Rgb([0, 255, 0]);
+    let CYAN = Rgb([0, 255, 255]);
+    let PURPLE = Rgb([128, 0, 128]);
+    let YELLOW = Rgb([255, 255, 0]);
 
     let mut canvas = RgbImage::new(
         u32::try_from(CANVAS_WIDTH + THRESHOLD_CANVAS).unwrap(),
         u32::try_from(CANVAS_HEIGHT + THRESHOLD_CANVAS).unwrap(),
     );
 
-    for (x, y, pix) in canvas.enumerate_pixels_mut() {
+    for (_x, _y, pix) in canvas.enumerate_pixels_mut() {
         pix.0 = BACKGROUND_COLOR.0;
     }
 
@@ -416,18 +299,18 @@ fn main() {
 
     // // Define triangles
     let triangles = vec![
-        Triangle::new((0, 1, 2), RED.clone()),
-        Triangle::new((0, 2, 3), RED.clone()),
-        Triangle::new((4, 0, 3), GREEN.clone()),
-        Triangle::new((4, 3, 7), GREEN.clone()),
-        Triangle::new((5, 4, 7), BLUE.clone()),
-        Triangle::new((5, 7, 6), BLUE.clone()),
-        Triangle::new((1, 5, 6), YELLOW.clone()),
-        Triangle::new((1, 6, 2), YELLOW.clone()),
-        Triangle::new((4, 5, 1), PURPLE.clone()),
-        Triangle::new((4, 1, 0), PURPLE.clone()),
-        Triangle::new((2, 6, 7), CYAN.clone()),
-        Triangle::new((2, 7, 3), CYAN.clone()),
+        Triangle::new((0, 1, 2), RED),
+        Triangle::new((0, 2, 3), RED),
+        Triangle::new((4, 0, 3), GREEN),
+        Triangle::new((4, 3, 7), GREEN),
+        Triangle::new((5, 4, 7), BLUE),
+        Triangle::new((5, 7, 6), BLUE),
+        Triangle::new((1, 5, 6), YELLOW),
+        Triangle::new((1, 6, 2), YELLOW),
+        Triangle::new((4, 5, 1), PURPLE),
+        Triangle::new((4, 1, 0), PURPLE),
+        Triangle::new((2, 6, 7), CYAN),
+        Triangle::new((2, 7, 3), CYAN),
     ];
 
     let vertices = vec![v0, v1, v2, v3, v4, v5, v6, v7];
@@ -438,14 +321,16 @@ fn main() {
         triangles.clone(),
         Transform::new(1.5, 45, VectorPoint::new(-1.5, 0., 7.)),
     );
-    let model_instance2 = Model::new(
-        ModelName::CUBE,
-        vertices.clone(),
-        triangles.clone(),
-        Transform::new(1.5, 45, VectorPoint::new(1.5, 1., 6.)),
-    );
+    // let model_instance2 = Model::new(
+    //     ModelName::CUBE,
+    //     vertices.clone(),
+    //     triangles.clone(),
+    //     Transform::new(1.5, 45, VectorPoint::new(1.5, 1., 6.)),
+    // );
 
-    render_scene(&mut canvas, vec![model_instance1, model_instance2]);
+    render_scene(&mut canvas, vec![model_instance1, 
+        // model_instance2
+        ]);
 
     // render_object(&mut canvas, vec![v0, v1, v2, v3, v4, v5, v6, v7], triangles);
     // draw_line(
