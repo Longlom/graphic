@@ -1,6 +1,15 @@
 use image::{Pixel, Rgb, RgbImage};
-use raster::*;
-use std::{path::Path};
+use std::path::Path;
+
+use core::*;
+use matrix::*;
+use model::*;
+use vector_point::*;
+
+mod core;
+mod matrix;
+mod model;
+mod vector_point;
 
 fn put_pixel(canvas: &mut RgbImage, color: &mut Rgb<u8>, coord: Point) {
     let y_offset = CANVAS_HEIGHT / 2;
@@ -57,37 +66,38 @@ fn interpolate_f32(i0: i32, d0: f32, i1: i32, d1: f32) -> Vec<f32> {
     values
 }
 
-fn draw_line(
-    canvas: &mut RgbImage,
-    point_a: &mut Point,
-    point_b: &mut Point,
-    color: &mut Rgb<u8>,
-) {
+fn draw_line(canvas: &mut RgbImage, point_a: &mut Point, point_b: &mut Point, color: &mut Rgb<u8>) {
     let dx = point_b.x - point_a.x;
     let dy = point_b.y - point_a.y;
+    let mut p0 = point_a.clone();
+    let mut p1 = point_b.clone();
 
     if dx.abs() > dy.abs() {
         //line is horizontalish
-        if point_a.x > point_b.x {
-            Point::swap(point_a, point_b);
+        if dx < 0 {
+            let temp = p0;
+            p0 = p1;
+            p1 = temp; 
         }
 
-        let ys = interpolate(point_a.x, point_a.y, point_b.x, point_b.y);
+        let ys = interpolate(p0.x, p0.y, p1.x, p1.y);
 
-        for x in point_a.x..point_b.x {
-            let point = Point::new(x, ys[(x - point_a.x) as usize]);
+        for x in p0.x..p1.x {
+            let point = Point::new(x, ys[(x - p0.x) as usize]);
             put_pixel(canvas, color, point);
         }
     } else {
         // Line is vertical-ish
-        if point_a.y > point_b.y {
-            Point::swap(point_a, point_b);
+        if dy < 0 {
+            let temp = p0;
+            p0 = p1;
+            p1 = temp; 
         }
 
-        let xs = interpolate(point_a.y, point_a.x, point_b.y, point_b.x);
+        let xs = interpolate(p0.y, p0.x, p1.y, p1.x);
 
-        for y in point_a.y..point_b.y {
-            let point = Point::new(xs[(y - point_a.y) as usize], y);
+        for y in p0.y..p1.y {
+            let point = Point::new(xs[(y - p0.y) as usize], y);
             put_pixel(canvas, color, point);
         }
     }
@@ -102,7 +112,7 @@ fn draw_wireframe_triangle(
 ) {
     draw_line(canvas, p0, p1, color);
     draw_line(canvas, p1, p2, color);
-    draw_line(canvas, p2, p0, color);
+    draw_line(canvas, p0, p2, color);
 }
 
 fn draw_filled_triangle(
@@ -188,6 +198,7 @@ fn project_vertex(v: VectorPoint) -> Point {
 }
 
 fn render_triangle(canvas: &mut RgbImage, triangle: &mut Triangle, projected: &mut Vec<Point>) {
+    // println!("{:?}", projected);
     let mut p0 = projected[triangle.vertex.0].clone();
     let mut p1 = projected[triangle.vertex.1].clone();
     let mut p2 = projected[triangle.vertex.2].clone();
@@ -206,18 +217,23 @@ fn render_object(canvas: &mut RgbImage, vertices: Vec<VectorPoint>, triangles: V
     }
 }
 
-fn render_scene(canvas: &mut RgbImage, instances: Vec<Model>) {
+fn render_scene(canvas: &mut RgbImage, camera: Camera, instances: Vec<Model>) {
+    let camera_matrix = Matrix::transpose(&camera.orientation)
+        * Matrix::new_translation_matrix(-1. * camera.position);
     for i in instances {
-        render_instance(canvas, i);
+        let transform = camera_matrix.clone() * i.transform_matrix.clone();
+        render_instance(canvas, i, transform);
     }
 }
 
-fn render_instance(canvas: &mut RgbImage, instance: Model) {
+fn render_instance(canvas: &mut RgbImage, instance: Model, transform: Matrix) {
     let mut projected = vec![];
 
     for v in instance.vertices {
-        let v_transformed = apply_transform(v, instance.transform.clone());
-        projected.push(project_vertex(v_transformed));
+        let v_homogenous = HomogenousVectorPoint::new(&v);
+        projected.push(project_vertex(VectorPoint::from(
+            transform.clone() * v_homogenous,
+        )));
     }
 
     for mut t in instance.triangles {
@@ -228,8 +244,9 @@ fn render_instance(canvas: &mut RgbImage, instance: Model) {
 fn apply_transform(v: VectorPoint, transform: Transform) -> VectorPoint {
     let res = v.scale(transform.scale);
     let res = res.rotate(transform.rotation);
-    
-    res.translate(transform.translation)
+    let res = res.translate(transform.translation);
+
+    res
 }
 
 fn main() {
@@ -250,42 +267,6 @@ fn main() {
     for (_x, _y, pix) in canvas.enumerate_pixels_mut() {
         pix.0 = BACKGROUND_COLOR.0;
     }
-
-    // draw_line(
-    //     &mut canvas,
-    //     &mut Point { x: 1300, y: 0 },
-    //     &mut Point { x: 0, y: 1300 },
-    //     Rgb([0, 0, 0]),
-    // );
-
-    // draw_line(
-    //     &mut canvas,
-    //     &mut Point { x: 0, y: 0 },
-    //     &mut Point { x: 450, y: 500 },
-    //     Rgb([0, 0, 0]),
-    // );
-
-    // draw_filled_triangle(
-    //     &mut Point { x: 0, y: 0 },
-    //     &mut Point { x: -40, y: 300 },
-    //     &mut Point { x: 300, y: 100 },
-    //     Rgb([0, 255, 0]),
-    //     &mut canvas,
-    // );
-
-    // The four "front" vertices
-    // let va_f = VectorPoint::new(-1., 1., 1.);
-    // let vb_f = VectorPoint::new(1., 1., 1.);
-    // let vc_f = VectorPoint::new(1., -1., 1.);
-    // let vd_f = VectorPoint::new(-1., -1., 1.);
-
-    // // The four "back" vertices
-    // let va_b = VectorPoint::new(-1., 1., 2.);
-    // let vb_b = VectorPoint::new(1., 1., 2.);
-    // let vc_b = VectorPoint::new(1., -1., 2.);
-    // let vd_b = VectorPoint::new(-1., -1., 2.);
-
-    // let t = VectorPoint::new(-1.5, 0., 3.);
 
     // Define vertices
     let v0 = VectorPoint::new(1., 1., 1.);
@@ -319,105 +300,20 @@ fn main() {
         ModelName::CUBE,
         vertices.clone(),
         triangles.clone(),
-        Transform::new(1.5, 45, VectorPoint::new(-1.5, 0., 7.)),
+        Transform::new(0.75, 0, VectorPoint::new(-1.5, 0., 7.)),
     );
-    // let model_instance2 = Model::new(
-    //     ModelName::CUBE,
-    //     vertices.clone(),
-    //     triangles.clone(),
-    //     Transform::new(1.5, 45, VectorPoint::new(1.5, 1., 6.)),
-    // );
+    let model_instance2 = Model::new(
+        ModelName::CUBE,
+        vertices.clone(),
+        triangles.clone(),
+        Transform::new(1., 195, VectorPoint::new(1.25, 2.5, 7.5)),
+    );
 
-    render_scene(&mut canvas, vec![model_instance1, 
-        // model_instance2
-        ]);
-
-    // render_object(&mut canvas, vec![v0, v1, v2, v3, v4, v5, v6, v7], triangles);
-    // draw_line(
-    //     &mut canvas,
-    //     &mut project_vertex(va_f),
-    //     &mut project_vertex(vb_f),
-    //     &mut BLUE,
-    // );
-
-    // draw_line(
-    //     &mut canvas,
-    //     &mut project_vertex(vb_f),
-    //     &mut project_vertex(vc_f),
-    //     &mut BLUE,
-    // );
-
-    // draw_line(
-    //     &mut canvas,
-    //     &mut project_vertex(vc_f),
-    //     &mut project_vertex(vd_f),
-    //     &mut BLUE,
-    // );
-
-    // draw_line(
-    //     &mut canvas,
-    //     &mut project_vertex(vd_f),
-    //     &mut project_vertex(va_f),
-    //     &mut BLUE,
-    // );
-
-    // // BackFace
-    // draw_line(
-    //     &mut canvas,
-    //     &mut project_vertex(va_b),
-    //     &mut project_vertex(vb_b),
-    //     &mut RED,
-    // );
-
-    // draw_line(
-    //     &mut canvas,
-    //     &mut project_vertex(vb_b),
-    //     &mut project_vertex(vc_b),
-    //     &mut RED,
-    // );
-
-    // draw_line(
-    //     &mut canvas,
-    //     &mut project_vertex(vc_b),
-    //     &mut project_vertex(vd_b),
-    //     &mut RED,
-    // );
-
-    // draw_line(
-    //     &mut canvas,
-    //     &mut project_vertex(vd_b),
-    //     &mut project_vertex(va_b),
-    //     &mut RED,
-    // );
-
-    // // The front-to-back edges
-    // draw_line(
-    //     &mut canvas,
-    //     &mut project_vertex(va_f),
-    //     &mut project_vertex(va_b),
-    //     &mut GREEN,
-    // );
-
-    // draw_line(
-    //     &mut canvas,
-    //     &mut project_vertex(vb_f),
-    //     &mut project_vertex(vb_b),
-    //     &mut GREEN,
-    // );
-
-    // draw_line(
-    //     &mut canvas,
-    //     &mut project_vertex(vc_f),
-    //     &mut project_vertex(vc_b),
-    //     &mut GREEN,
-    // );
-
-    // draw_line(
-    //     &mut canvas,
-    //     &mut project_vertex(vd_f),
-    //     &mut project_vertex(vd_b),
-    //     &mut GREEN,
-    // );
+    let camera = Camera::new(
+        VectorPoint::new(-3., 1., 2.),
+        Matrix::new_Y_rotation_matrix(-30),
+    );
+    render_scene(&mut canvas, camera, vec![model_instance1, model_instance2]);
 
     canvas.save(path).unwrap();
 }
