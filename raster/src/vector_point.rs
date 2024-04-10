@@ -2,6 +2,7 @@ use std::ops;
 
 use crate::matrix::{Matrix, MATRIX_DIM};
 
+#[derive(Clone, Copy, Debug)]
 pub struct HomogenousVectorPoint {
     pub(crate) values: [f32; MATRIX_DIM],
 }
@@ -14,7 +15,7 @@ impl HomogenousVectorPoint {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct VectorPoint {
     pub x: f32,
     pub y: f32,

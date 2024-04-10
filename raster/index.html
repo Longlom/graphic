@@ -1,11 +1,14 @@
 <!--
-!!html_title Camera placement demo - Computer Graphics from scratch
+!!html_title Clipping demo - Computer Graphics from scratch
 -->
 
-# Camera placement demo
+# Clipping demo
 
-This demo extends the [previous one](raster-07.html) by adding support for putting the camera anywhere
-in the scene, and giving it any orientation, as described in the [Camera Transform](10-describing-and-rendering-a-scene.html#camera-transform) section.
+This demo extends the [previous one](raster-08.html) by implementing instance and triangle clipping,
+as described in the [Clipping](../11-clipping.html) chapter.
+
+Although the output looks identical, there's a cube located directly behind the camera. Thanks to the
+clipping algorithm, it's not visible in the rendered scene.
 
 <div class="centered">
   <canvas id="canvas" width=600 height=600 style="border: 1px grey solid"></canvas>
@@ -71,13 +74,25 @@ var Vertex = function(x, y, z) {
 
 
 // A 4D vertex (a 3D vertex in homogeneous coordinates).
-var Vertex4 = function(x, y, z, w) {
-  if (!(this instanceof Vertex4)) { return new Vertex4(x, y, z, w); }
+var Vertex4 = function(arg1, y, z, w) {
+  if (!(this instanceof Vertex4)) { return new Vertex4(arg1, y, z, w); }
 
-  this.x = x;
-  this.y = y;
-  this.z = z;
-  this.w = w;
+  if (arg1 instanceof Vertex) {
+    this.x = arg1.x;
+    this.y = arg1.y;
+    this.z = arg1.z;
+    this.w = 1;
+  } else if (arg1 instanceof Vertex4) {
+    this.x = arg1.x;
+    this.y = arg1.y;
+    this.z = arg1.z;
+    this.w = arg1.w;
+  } else {
+    this.x = arg1;
+    this.y = y;
+    this.z = z;
+    this.w = w;
+  }
 }
 
 
@@ -104,13 +119,27 @@ var Triangle = function(v0, v1, v2, color) {
 
 
 // A Model.
-var Model = function(vertices, triangles) {
-  if (!(this instanceof Model)) { return new Model(vertices, triangles); }
+var Model = function(vertices, triangles, bounds_center, bounds_radius) {
+  if (!(this instanceof Model)) { return new Model(vertices, triangles, bounds_center, bounds_radius); }
 
   this.vertices = vertices;
   this.triangles = triangles;
+  this.bounds_center = bounds_center;
+  this.bounds_radius = bounds_radius;
 }
 
+
+// An Instance.
+var Instance = function(model, position, orientation, scale) {
+  if (!(this instanceof Instance)) { return new Instance(model, position, orientation, scale); }
+
+  this.model = model;
+  this.position = position;
+  this.orientation = orientation || Identity4x4;
+  this.scale = scale || 1.0;
+
+  this.transform = MultiplyMM4(MakeTranslationMatrix(this.position), MultiplyMM4(this.orientation, MakeScalingMatrix(this.scale)));
+}
 
 
 // The Camera.
@@ -119,6 +148,16 @@ var Camera = function(position, orientation) {
 
   this.position = position;
   this.orientation = orientation;
+  this.clipping_planes = [];
+}
+
+
+// A Clipping Plane.
+var Plane = function(normal, distance) {
+  if (!(this instanceof Plane)) { return new Plane(normal, distance); }
+
+  this.normal = normal;
+  this.distance = distance;
 }
 
 
@@ -129,6 +168,12 @@ var Camera = function(position, orientation) {
 // Computes k * vec.
 var Multiply = function(k, vec) {
   return Vertex(k*vec.x, k*vec.y, k*vec.z);
+}
+
+
+// Computes dot product.
+var Dot = function(v1, v2) {
+  return v1.x*v2.x + v1.y*v2.y + v1.z*v2.z;
 }
 
 
@@ -264,8 +309,8 @@ var DrawLine = function(p0, p1, color) {
 
 var DrawWireframeTriangle = function(p0, p1, p2, color) {
   DrawLine(p0, p1, color);
-  // DrawLine(p1, p2, color);
-  // DrawLine(p0, p2, color);
+  DrawLine(p1, p2, color);
+  DrawLine(p0, p2, color);
 }
 
 
@@ -290,12 +335,66 @@ var RenderTriangle = function(triangle, projected) {
 }
 
 
-var RenderModel = function(model, transform) {
+// Clips a triangle against a plane. Adds output to triangles and vertices.
+var ClipTriangle = function(triangle, plane, triangles, vertices) {
+  var v0 = vertices[triangle.v0];
+  var v1 = vertices[triangle.v1];
+  var v2 = vertices[triangle.v2];
+
+  var in0 = Dot(plane.normal, v0) + plane.distance > 0;
+  var in1 = Dot(plane.normal, v1) + plane.distance > 0;
+  var in2 = Dot(plane.normal, v2) + plane.distance > 0;
+
+  var in_count = in0 + in1 + in2;
+  if (in_count == 0) {
+    // Nothing to do - the triangle is fully clipped out.
+  } else if (in_count == 3) {
+    // The triangle is fully in front of the plane.
+    triangles.push(triangle);
+  } else if (in_count == 1) {
+    // The triangle has one vertex in. Output is one clipped triangle.
+  } else if (in_count == 2) {
+    // The triangle has two vertices in. Output is two clipped triangles.
+  }
+}
+
+
+var TransformAndClip = function(clipping_planes, model, scale, transform) {
+  // Transform the bounding sphere, and attempt early discard.s
+  center = MultiplyMV(transform, Vertex4(model.bounds_center));
+  console.log('center', center)
+  var radius = model.bounds_radius*scale;
+  for (var p = 0; p < clipping_planes.length; p++) {
+    var distance = Dot(clipping_planes[p].normal, center) + clipping_planes[p].distance;
+    if (distance < -radius) {
+      return null;
+    }
+  }
+
+  // Apply modelview transform.
+  var vertices = [];
+  for (var i = 0; i < model.vertices.length; i++) {
+    vertices.push(MultiplyMV(transform, Vertex4(model.vertices[i])));
+  }
+
+  // Clip the entire model against each successive plane.
+  var triangles = model.triangles.slice();
+  for (var p = 0; p < clipping_planes.length; p++) {
+    new_triangles = []
+    for (var i = 0; i < triangles.length; i++) {
+      ClipTriangle(triangles[i], clipping_planes[p], new_triangles, vertices);
+    }
+    triangles = new_triangles;
+  }
+
+  return Model(vertices, triangles, center, model.bounds_radius);
+}
+
+
+var RenderModel = function(model) {
   var projected = [];
   for (var i = 0; i < model.vertices.length; i++) {
-    var vertex = model.vertices[i]
-    var vertexH = Vertex4(vertex.x, vertex.y, vertex.z, 1)
-    projected.push(ProjectVertex(MultiplyMV(transform, vertexH)));
+    projected.push(ProjectVertex(Vertex4(model.vertices[i])));
   }
   for (var i = 0; i < model.triangles.length; i++) {
     RenderTriangle(model.triangles[i], projected);
@@ -304,11 +403,15 @@ var RenderModel = function(model, transform) {
 
 
 var RenderScene = function(camera, instances) {
-    var cameraMatrix = MultiplyMM4(Transposed(camera.orientation), MakeTranslationMatrix(Multiply(-1, camera.position)));
+  var cameraMatrix = MultiplyMM4(Transposed(camera.orientation), MakeTranslationMatrix(Multiply(-1, camera.position)));
 
   for (var i = 0; i < instances.length; i++) {
     var transform = MultiplyMM4(cameraMatrix, instances[i].transform);
-    RenderModel(instances[i].model, transform);
+    var clipped = TransformAndClip(camera.clipping_planes, instances[i].model, instances[i].scale, transform);
+    if (clipped != null) {
+      console.log(clipped)
+      RenderModel(clipped);
+    }
   }
 }
 
@@ -346,27 +449,23 @@ var triangles = [
   Triangle(2, 7, 3, CYAN)
 ];
 
-
-// An Instance.
-var Instance = function(model, position, orientation, scale) {
-  if (!(this instanceof Instance)) { return new Instance(model, position, orientation, scale); }
-
-  this.model = model;
-  this.position = position;
-  this.orientation = orientation || Identity4x4;
-  this.scale = scale || 1.0;
-
-  this.transform = MultiplyMM4(MakeTranslationMatrix(this.position), MultiplyMM4(this.orientation, MakeScalingMatrix(this.scale)));
-}
-
-
-var cube = Model(vertices, triangles);
+var cube = Model(vertices, triangles, Vertex(0, 0, 0), Math.sqrt(3));
 
 var instances = [Instance(cube, Vertex(-1.5, 0, 7), Identity4x4, 0.75),
-	         Instance(cube, Vertex(1.25, 2.5, 7.5), MakeOYRotationMatrix(195)),
+	               Instance(cube, Vertex(1.25, 2.5, 7.5), MakeOYRotationMatrix(195)),
+                 Instance(cube, Vertex(0, 0, -10), MakeOYRotationMatrix(195)),
 ];
 
 var camera = Camera(Vertex(-3, 1, 2), MakeOYRotationMatrix(-30));
+
+var s2 = 1.0 / Math.sqrt(2);
+camera.clipping_planes = [
+  Plane(Vertex(0, 0, 1), -1), // Near
+  Plane(Vertex(s2, 0, s2), 0), // Left
+  Plane(Vertex(-s2, 0, s2), 0), // Right
+  Plane(Vertex(0, -s2, s2), 0), // Top
+  Plane(Vertex(0, s2, s2), 0), // Bottom
+];
 
 var Render = function() {
   RenderScene(camera, instances);

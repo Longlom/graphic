@@ -4,7 +4,7 @@ use crate::vector_point::{HomogenousVectorPoint, VectorPoint};
 
 pub const MATRIX_DIM: usize = 4;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 
 pub struct Matrix {
     pub values: [[f32; MATRIX_DIM]; MATRIX_DIM],

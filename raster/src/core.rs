@@ -2,7 +2,7 @@ use std::fmt;
 
 use image::Rgb;
 
-use crate::{matrix::Matrix, vector_point::VectorPoint};
+use crate::{matrix::Matrix, vector_point::VectorPoint, HomogenousVectorPoint};
 
 pub type Color = Rgb<u8>;
 
@@ -45,16 +45,33 @@ impl Point {
     }
 }
 
+pub struct Plane {
+    pub normal: VectorPoint,
+    pub distance: f32,
+}
+
+impl Plane {
+    pub fn new(normal: VectorPoint, distance: f32) -> Self {
+        Self { normal, distance }
+    }
+}
+
 pub struct Camera {
     pub position: VectorPoint,
     pub orientation: Matrix,
+    pub clipping_planes: Vec<Plane>,
 }
 
 impl Camera {
-    pub fn new(position: VectorPoint, orientation: Matrix) -> Self {
+    pub fn new(position: VectorPoint, orientation: Matrix, clipping_planes: Vec<Plane>) -> Self {
         Self {
             position,
             orientation,
+            clipping_planes,
         }
     }
+}
+
+pub fn dot(v1: &HomogenousVectorPoint, v2: &HomogenousVectorPoint) -> f32 {
+    v1.values[0] * v2.values[0] + v1.values[1] * v2.values[1] + v1.values[2] * v2.values[2]
 }

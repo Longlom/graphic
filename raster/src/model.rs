@@ -1,6 +1,6 @@
 use crate::{Color, Matrix, VectorPoint};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Triangle {
     pub vertex: (usize, usize, usize),
     pub color: Color,
@@ -12,11 +12,13 @@ impl Triangle {
     }
 }
 
+#[derive(Debug)]
+
 pub enum ModelName {
     CUBE,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Transform {
     pub scale: f32,
     pub rotation: i32,
@@ -33,12 +35,15 @@ impl Transform {
     }
 }
 
+#[derive(Debug)]
 pub struct Model {
     pub name: ModelName,
     pub vertices: Vec<VectorPoint>,
     pub triangles: Vec<Triangle>,
     pub transform: Transform,
     pub transform_matrix: Matrix,
+    pub bounds_center: VectorPoint,
+    pub bounds_radius: f32,
 }
 
 impl Model {
@@ -47,6 +52,8 @@ impl Model {
         vertices: Vec<VectorPoint>,
         triangles: Vec<Triangle>,
         transform: Transform,
+        bounds_center: VectorPoint,
+        bounds_radius: f32,
     ) -> Self {
         let transform_matrix = Matrix::new_translation_matrix(transform.translation)
             * (Matrix::new_Y_rotation_matrix(transform.rotation)
@@ -57,6 +64,8 @@ impl Model {
             triangles,
             transform,
             transform_matrix,
+            bounds_center,
+            bounds_radius,
         }
     }
 }

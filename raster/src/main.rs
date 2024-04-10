@@ -16,7 +16,7 @@ fn put_pixel(canvas: &mut RgbImage, color: &mut Rgb<u8>, coord: Point) {
     let x_offset = CANVAS_WIDTH / 2;
 
     if coord.x < -x_offset || coord.x > x_offset || coord.y < -y_offset || coord.y > y_offset {
-        println!("Point - {:?} is out of bound ", coord);
+        // println!("Point - {:?} is out of bound ", coord);
         return;
     }
 
@@ -77,7 +77,7 @@ fn draw_line(canvas: &mut RgbImage, point_a: &mut Point, point_b: &mut Point, co
         if dx < 0 {
             let temp = p0;
             p0 = p1;
-            p1 = temp; 
+            p1 = temp;
         }
 
         let ys = interpolate(p0.x, p0.y, p1.x, p1.y);
@@ -91,7 +91,7 @@ fn draw_line(canvas: &mut RgbImage, point_a: &mut Point, point_b: &mut Point, co
         if dy < 0 {
             let temp = p0;
             p0 = p1;
-            p1 = temp; 
+            p1 = temp;
         }
 
         let xs = interpolate(p0.y, p0.x, p1.y, p1.x);
@@ -190,10 +190,10 @@ fn draw_filled_triangle(
     }
 }
 
-fn project_vertex(v: VectorPoint) -> Point {
+fn project_vertex(v: HomogenousVectorPoint) -> Point {
     Point::viewport_to_canvas(
-        v.x * PROJECTION_PLANE_Z / v.z,
-        v.y * PROJECTION_PLANE_Z / v.z,
+        v.values[0] * PROJECTION_PLANE_Z / v.values[2],
+        v.values[1] * PROJECTION_PLANE_Z / v.values[2],
     )
 }
 
@@ -205,16 +205,98 @@ fn render_triangle(canvas: &mut RgbImage, triangle: &mut Triangle, projected: &m
     draw_wireframe_triangle(&mut p0, &mut p1, &mut p2, &mut triangle.color, canvas)
 }
 
-fn render_object(canvas: &mut RgbImage, vertices: Vec<VectorPoint>, triangles: Vec<Triangle>) {
-    let mut projected = vec![];
+fn clip_triangle(
+    triangle: &Triangle,
+    plane: &Plane,
+    triangles: &mut Vec<Triangle>,
+    vertices: &Vec<VectorPoint>,
+) {
+    let v0 = vertices[triangle.vertex.0];
+    let v1 = vertices[triangle.vertex.1];
+    let v2 = vertices[triangle.vertex.2];
 
-    for v in vertices {
-        projected.push(project_vertex(v));
+    let in0 = dot(
+        &HomogenousVectorPoint::new(&plane.normal),
+        &HomogenousVectorPoint::new(&v0),
+    ) + plane.distance
+        > 0.;
+    let in1 = dot(
+        &HomogenousVectorPoint::new(&plane.normal),
+        &HomogenousVectorPoint::new(&v1),
+    ) + plane.distance
+        > 0.;
+    let in2 = dot(
+        &HomogenousVectorPoint::new(&plane.normal),
+        &HomogenousVectorPoint::new(&v2),
+    ) + plane.distance
+        > 0.;
+
+    let mut in_count = 0;
+
+    if in0 {
+        in_count += 1;
     }
 
-    for mut t in triangles {
-        render_triangle(canvas, &mut t, &mut projected);
+    if in1 {
+        in_count += 1;
     }
+
+    if in2 {
+        in_count += 1;
+    }
+
+    match in_count {
+        0 => return,
+        3 => triangles.push(triangle.clone()),
+        _ => return,
+    }
+}
+
+fn transform_and_clip(
+    clipping_planes: &Vec<Plane>,
+    model: &Model,
+    scale: f32,
+    transform: Matrix,
+) -> Option<Model> {
+    let center = transform.clone() * HomogenousVectorPoint::new(&model.bounds_center);
+    println!("{:?}", center);
+    let radius = model.bounds_radius * scale;
+
+    for p in clipping_planes {
+        let distance = dot(&HomogenousVectorPoint::new(&p.normal), &center) + p.distance;
+        if distance < -radius {
+            return None;
+        }
+    }
+
+    let mut vertices: Vec<VectorPoint> = vec![];
+
+    for v in &model.vertices {
+        vertices.push(VectorPoint::from(
+            transform.clone() * HomogenousVectorPoint::new(v),
+        ));
+    }
+
+    let mut triangles = model.triangles.clone();
+
+    for p in clipping_planes {
+        let mut new_triangles = vec![];
+
+        for t in &triangles {
+            clip_triangle(t, p, &mut new_triangles, &vertices);
+        }
+
+        triangles = new_triangles;
+    }
+
+    return Some(Model::new(
+        ModelName::CUBE,
+        vertices,
+        triangles,
+        model.transform.clone(),
+        center.into(),
+        model.bounds_radius,
+    ));
 }
 
 fn render_scene(canvas: &mut RgbImage, camera: Camera, instances: Vec<Model>) {
@@ -222,7 +304,18 @@ fn render_scene(canvas: &mut RgbImage, camera: Camera, instances: Vec<Model>) {
         * Matrix::new_translation_matrix(-1. * camera.position);
     for i in instances {
         let transform = camera_matrix.clone() * i.transform_matrix.clone();
-        render_instance(canvas, i, transform);
+        let clipped = transform_and_clip(
+            &camera.clipping_planes,
+            &i,
+            i.transform.scale,
+            transform.clone(),
+        );
+
+
+        if clipped.is_some() {
+        println!("clipped - {:?}  \n", clipped);
+            render_instance(canvas, clipped.unwrap(), transform);
+        }
     }
 }
 
@@ -231,22 +324,12 @@ fn render_instance(canvas: &mut RgbImage, instance: Model, transform: Matrix) {
 
     for v in instance.vertices {
         let v_homogenous = HomogenousVectorPoint::new(&v);
-        projected.push(project_vertex(VectorPoint::from(
-            transform.clone() * v_homogenous,
-        )));
+        projected.push(project_vertex(transform.clone() * v_homogenous));
     }
 
     for mut t in instance.triangles {
         render_triangle(canvas, &mut t, &mut projected)
     }
-}
-
-fn apply_transform(v: VectorPoint, transform: Transform) -> VectorPoint {
-    let res = v.scale(transform.scale);
-    let res = res.rotate(transform.rotation);
-    let res = res.translate(transform.translation);
-
-    res
 }
 
 fn main() {
@@ -296,24 +379,54 @@ fn main() {
 
     let vertices = vec![v0, v1, v2, v3, v4, v5, v6, v7];
 
+    let bounds_center = VectorPoint::new(0., 0., 0.);
+
     let model_instance1 = Model::new(
         ModelName::CUBE,
         vertices.clone(),
         triangles.clone(),
-        Transform::new(0.75, 0, VectorPoint::new(-1.5, 0., 7.)),
+        Transform::new(0.75, 0, VectorPoint::new(-1.5, 0., 5.)),
+        bounds_center.clone(),
+        f32::sqrt(3.),
     );
     let model_instance2 = Model::new(
         ModelName::CUBE,
         vertices.clone(),
         triangles.clone(),
         Transform::new(1., 195, VectorPoint::new(1.25, 2.5, 7.5)),
+        bounds_center.clone(),
+        f32::sqrt(3.),
     );
+
+    let model_instance3 = Model::new(
+        ModelName::CUBE,
+        vertices.clone(),
+        triangles.clone(),
+        Transform::new(1., 195, VectorPoint::new(0., 0., -10.)),
+        bounds_center.clone(),
+        f32::sqrt(3.),
+    );
+
+    let s2 = 1.0 / f32::sqrt(2.);
+
+    let clipping_planes = vec![
+        Plane::new(VectorPoint::new(0., 0., 1.), -1.), //Near
+        Plane::new(VectorPoint::new(s2, 0., s2), 0.),  // Left
+        Plane::new(VectorPoint::new(-s2, 0., s2), 0.), // Right
+        Plane::new(VectorPoint::new(0., -s2, s2), 0.), // Top
+        Plane::new(VectorPoint::new(0., s2, s2), 0.),  // Bottom
+    ];
 
     let camera = Camera::new(
         VectorPoint::new(-3., 1., 2.),
         Matrix::new_Y_rotation_matrix(-30),
+        clipping_planes,
     );
-    render_scene(&mut canvas, camera, vec![model_instance1, model_instance2]);
+    render_scene(
+        &mut canvas,
+        camera,
+        vec![model_instance1, model_instance2, model_instance3],
+    );
 
     canvas.save(path).unwrap();
 }
